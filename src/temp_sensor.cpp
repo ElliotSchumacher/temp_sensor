@@ -15,13 +15,15 @@ const String CRC_ERROR_MSG = "CRC problem with temperature sensors";
 const String CONNECTED_MSG = "Arduino device connected";
 const uint16_t TEMP_CHECK_INTERVAL = 60000;
 const uint32_t TEMP_WARNING_INTERVAL = 3600000; // 1 hour
-const uint32_t LOG_INTERVAL = 21600000; // 6 hours 
+const uint32_t LOG_INTERVAL = 3600000; // 1 hours 
 
 const uint8_t LED_OFF = 1;
 const uint8_t LED_ON = 0;
 const uint8_t LED_HB = LED_BUILTIN;
 const float UPPER_BOUND_WARM = 110;
 const float LOWER_BOUND_WARM = 70;
+const float UPPER_BOUND_COOL = 110;
+const float LOWER_BOUND_COOL = 70;
 
 const String IFTTT_URL = "http://maker.ifttt.com/trigger/";
 const String IFTTT_KEY = "/with/key/jtVyseeuuPpAePoO0VdfHahhA6xwZHvaeNGDzfsUsmt";
@@ -39,7 +41,8 @@ HTTPClient http;
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
 DelayTimer dtTemp;
-DelayTimer dtWarning;
+DelayTimer dtWarningWarm;
+DelayTimer dtWarningCool;
 DelayTimer dtLog;
 uint8_t errnum = 0;
 uint8_t state = 0;
@@ -86,7 +89,8 @@ void loop() {
         }
     }
 
-    boolean time2ValidateTemp = dtTemp.tripped(msNow) && dtWarning.tripped(msNow);
+    boolean time2Warn = dtWarningWarm.tripped(msNow) || dtWarningCool.tripped(msNow);
+    boolean time2ValidateTemp = dtTemp.tripped(msNow) && time2Warn;
     boolean time2Log = dtLog.tripped(msNow);
     if(time2ValidateTemp || time2Log) {
         warmTemp = getTemperature(WARM_ADDRESS, false);
@@ -97,17 +101,20 @@ void loop() {
         Serial.print("----Cool: ");
         Serial.println(coolTemp);
         if(time2ValidateTemp) {
-            if (warmTemp < LOWER_BOUND_WARM || UPPER_BOUND_WARM < warmTemp) {
-                String message = tempMessage(warmTemp, "warm");
+            boolean extremeTempWarm = warmTemp < LOWER_BOUND_WARM || UPPER_BOUND_WARM < warmTemp;
+            boolean extremeTempCool = coolTemp < LOWER_BOUND_COOL || UPPER_BOUND_COOL < coolTemp;
+            if (extremeTempWarm || extremeTempCool) {
+                String message;
+                if (extremeTempWarm) {
+                    message = tempMessage(warmTemp, "warm");
+                    dtWarningWarm.reset(msNow, TEMP_WARNING_INTERVAL);
+                }
+                if (extremeTempCool) {
+                    String message = tempMessage(coolTemp, "cool");`
+                    dtWarningCool.reset(msNow, TEMP_WARNING_INTERVAL);
+                }
                 errnum = notifierCall(message);
                 errnum = logCall(warmTemp, coolTemp);
-                dtWarning.reset(msNow, TEMP_WARNING_INTERVAL);
-            }
-            if (coolTemp < LOWER_BOUND_WARM || UPPER_BOUND_WARM < coolTemp) {
-                String message = tempMessage(coolTemp, "cool");
-                errnum = notifierCall(message);
-                errnum = logCall(warmTemp, coolTemp);
-                dtWarning.reset(msNow, TEMP_WARNING_INTERVAL);
             }
         }
         if(time2Log) {
@@ -196,7 +203,16 @@ uint8_t logCall(float temp1, float temp2) {
 String tempMessage(float temp, String position) {
     // "The temperature on the WARM side is too HOT (72.3 F)"
     String adjective;
-    if (temp < LOWER_BOUND_WARM) {
+    float upperBound;
+    float lowerBound;
+    if (position.equals("warm")) {
+        upperBound = UPPER_BOUND_WARM;
+        lowerBound = LOWER_BOUND_WARM;
+    } else if(position.equals("cool")) {
+        upperBound = UPPER_BOUND_COOL;
+        lowerBound = LOWER_BOUND_COOL;
+    }
+    if (temp < lowerBound) {
         adjective = "cold";
     } else {
         adjective = "hot";
