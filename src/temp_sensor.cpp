@@ -2,7 +2,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <OneWire.h>
-#include <DallasTemperature.h>
+// #include <DallasTemperature.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "DelayTimer.h"
@@ -20,13 +20,12 @@ const uint32_t LOG_INTERVAL = 3600000; // 1 hours
 const uint8_t LED_OFF = 1;
 const uint8_t LED_ON = 0;
 const uint8_t LED_HB = LED_BUILTIN;
-const float UPPER_BOUND_WARM = 110;
-const float LOWER_BOUND_WARM = 70;
-const float UPPER_BOUND_COOL = 110;
-const float LOWER_BOUND_COOL = 70;
+const float UPPER_BOUND_WARM = 100;
+const float LOWER_BOUND_WARM = 55;
+const float UPPER_BOUND_COOL = 100;
+const float LOWER_BOUND_COOL = 55;
 
 const String IFTTT_URL = "http://maker.ifttt.com/trigger/";
-const String IFTTT_KEY = "/with/key/jtVyseeuuPpAePoO0VdfHahhA6xwZHvaeNGDzfsUsmt";
 
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
 const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; // RED
@@ -34,6 +33,7 @@ const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; //
 float getTemperature(const byte address[8], boolean isCelsius);
 uint8_t notifierCall(String message);
 uint8_t logCall(float temp1, float temp2);
+uint8_t pingListener();
 String tempMessage(float temp, String position);
 
 WiFiClient client;
@@ -61,8 +61,12 @@ void setup() {
 	}
     digitalWrite(LED_HB, LED_ON);
     Serial.println("Connected");
-    errnum = notifierCall(CONNECTED_MSG);
+    errnum = notifierCall(CONNECTED_MSG); // Send connected IFTTT message
     Serial.println(errnum);
+    delay(2000);
+    uint8_t temp = pingListener(); // Send a notification to the listener server
+    Serial.println(temp);
+    Serial.println("Pinged Listener");
 }
 
 void loop() {
@@ -110,7 +114,7 @@ void loop() {
                     dtWarningWarm.reset(msNow, TEMP_WARNING_INTERVAL);
                 }
                 if (extremeTempCool) {
-                    String message = tempMessage(coolTemp, "cool");`
+                    String message = tempMessage(coolTemp, "cool");
                     dtWarningCool.reset(msNow, TEMP_WARNING_INTERVAL);
                 }
                 errnum = notifierCall(message);
@@ -163,7 +167,9 @@ float getTemperature(const byte address[8], boolean isCelsius) {
 uint8_t notifierCall(String message) {
     String url = IFTTT_URL + "notify" + IFTTT_KEY;
     String body = "value1=" + message;
-    Serial.println(url);
+    Serial.print("|");
+    Serial.print(url);
+    Serial.println("|");
     Serial.println(body);
 
     if (http.begin(client, url)) {
@@ -183,7 +189,7 @@ uint8_t notifierCall(String message) {
 uint8_t logCall(float temp1, float temp2) {
     String url = IFTTT_URL + "temp_log" + IFTTT_KEY;
     String body = "value1=" + String(temp1) + "&value2=" + String(temp2);
-    Serial.println(url);
+    Serial.print(url);
     Serial.println(body);
 
     if (http.begin(client, url)) {
@@ -191,6 +197,28 @@ uint8_t logCall(float temp1, float temp2) {
         int httpCode = http.POST(body);
         Serial.println(httpCode);
         if (httpCode <= 0) { //Check the returning code
+            return 2;
+        }
+        http.end();   //Close connection
+    } else {
+        return 1;
+    }
+    return 0;
+}
+
+uint8_t pingListener() {
+    String url = "http://192.168.0.14:8000/temp_sensors";
+    // String url = "http://192.168.0.14";
+    String body = "key=" + String(KEY);
+    Serial.println(url);
+    Serial.println(body);
+
+    if (http.begin(client, "192.168.0.14", 8000, "/temp_sensors")) {
+        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+        int httpCode = http.POST(body);
+        Serial.println(httpCode);
+        if (httpCode <= 0) { //Check the returning code
+            Serial.println("Bad httpCode");
             return 2;
         }
         http.end();   //Close connection
@@ -214,7 +242,7 @@ String tempMessage(float temp, String position) {
     }
     if (temp < lowerBound) {
         adjective = "cold";
-    } else {
+    } else if (upperBound < temp) {
         adjective = "hot";
     }
     String message = position + "side is too " + adjective + "(" + temp + ")";

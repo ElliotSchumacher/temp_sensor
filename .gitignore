@@ -7,3 +7,9 @@ src/main.cpp
 src/ex_DS18B20.cpp
 src/ex_web_connection.cpp
 secret.h
+.travis.yml
+temp-sensor.code-workspace
+.vscode/settings.json
+include/README
+lib/README
+test/README
