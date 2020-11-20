@@ -25,7 +25,8 @@ const float LOWER_BOUND_WARM = 55;
 const float UPPER_BOUND_COOL = 100;
 const float LOWER_BOUND_COOL = 55;
 
-const String IFTTT_URL = "http://maker.ifttt.com/trigger/";
+const String IFTTT_HOST = "maker.ifttt.com";
+const String LISTENER_HOST = "frozen-reef-06019.herokuapp.com";
 
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
 const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; // RED
@@ -35,9 +36,9 @@ uint8_t notifierCall(String message);
 uint8_t logCall(float temp1, float temp2);
 uint8_t pingListener();
 String tempMessage(float temp, String position);
+uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost);
 
 WiFiClient client;
-HTTPClient http;
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
 DelayTimer dtTemp;
@@ -59,14 +60,13 @@ void setup() {
         digitalWrite(LED_HB, !digitalRead(LED_HB));
         Serial.print(".");
 	}
+    delay(2000);
     digitalWrite(LED_HB, LED_ON);
     Serial.println("Connected");
     errnum = notifierCall(CONNECTED_MSG); // Send connected IFTTT message
-    Serial.println(errnum);
-    delay(2000);
-    uint8_t temp = pingListener(); // Send a notification to the listener server
-    Serial.println(temp);
-    Serial.println("Pinged Listener");
+    Serial.println("errnum: " + String(errnum));
+    errnum = pingListener(); // Send a notification to the listener server
+    Serial.println("errnum: "  + String(errnum));
 }
 
 void loop() {
@@ -126,6 +126,7 @@ void loop() {
             dtLog.reset(msNow, LOG_INTERVAL);
         }
         dtTemp.reset(msNow, TEMP_CHECK_INTERVAL);
+        pingListener();
     }
 }
 
@@ -165,67 +166,27 @@ float getTemperature(const byte address[8], boolean isCelsius) {
 }
 
 uint8_t notifierCall(String message) {
-    String url = IFTTT_URL + "notify" + IFTTT_KEY;
+    String host = IFTTT_HOST;
+    uint16_t port = 80;
+    String uri = "/trigger/notify" + IFTTT_KEY;
     String body = "value1=" + message;
-    Serial.print("|");
-    Serial.print(url);
-    Serial.println("|");
-    Serial.println(body);
-
-    if (http.begin(client, url)) {
-        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-        int httpCode = http.POST(body);
-        Serial.println(httpCode);
-        if (httpCode <= 0) { //Check the returning code
-            return 2;
-        }
-        http.end();   //Close connection
-    } else {
-        return 1;
-    }
-    return 0;
+    return sendHTTPRequest(host, port, uri, body, true);
 }
 
 uint8_t logCall(float temp1, float temp2) {
-    String url = IFTTT_URL + "temp_log" + IFTTT_KEY;
+    String host = IFTTT_HOST;
+    uint16_t port = 80;
+    String uri = "/trigger/temp_log" + IFTTT_KEY;
     String body = "value1=" + String(temp1) + "&value2=" + String(temp2);
-    Serial.print(url);
-    Serial.println(body);
-
-    if (http.begin(client, url)) {
-        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-        int httpCode = http.POST(body);
-        Serial.println(httpCode);
-        if (httpCode <= 0) { //Check the returning code
-            return 2;
-        }
-        http.end();   //Close connection
-    } else {
-        return 1;
-    }
-    return 0;
+    return sendHTTPRequest(host, port, uri, body, true);
 }
 
 uint8_t pingListener() {
-    String url = "http://192.168.0.14:8000/temp_sensors";
-    // String url = "http://192.168.0.14";
+    String host = LISTENER_HOST;
+    uint16_t port = 80;
+    String uri = "/temp_sensors";
     String body = "key=" + String(KEY);
-    Serial.println(url);
-    Serial.println(body);
-
-    if (http.begin(client, "192.168.0.14", 8000, "/temp_sensors")) {
-        http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-        int httpCode = http.POST(body);
-        Serial.println(httpCode);
-        if (httpCode <= 0) { //Check the returning code
-            Serial.println("Bad httpCode");
-            return 2;
-        }
-        http.end();   //Close connection
-    } else {
-        return 1;
-    }
-    return 0;
+    return sendHTTPRequest(host, port, uri, body, true);
 }
 
 String tempMessage(float temp, String position) {
@@ -248,4 +209,33 @@ String tempMessage(float temp, String position) {
     String message = position + "side is too " + adjective + "(" + temp + ")";
     Serial.println(message);
     return message;
+}
+
+uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost) {
+    Serial.println();
+    Serial.println("host: " + host);
+    Serial.println("port: " + String(port));
+    Serial.println("uri: " + uri);
+    Serial.println("body: " + body);
+    Serial.print("isPost: ");
+    Serial.println(isPost);
+    HTTPClient http;
+    if (http.begin(client, host, port, uri)) {
+        int httpCode;
+        if (isPost) {
+            http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+            // http.addHeader("Connection", "close");
+            httpCode = http.POST(body);
+        } else {
+            httpCode = http.GET();
+        }
+        Serial.println("httpCode: " + String(httpCode));
+        http.end();   //Close connection
+        if (httpCode <= 0) { //Check the returning code
+            return 2;
+        }
+    } else {
+        return 1;
+    }
+    return 0;
 }
