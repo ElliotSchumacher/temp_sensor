@@ -168,7 +168,7 @@ float getTemperature(const byte address[8], boolean isCelsius) {
 uint8_t notifierCall(String message) {
     String host = IFTTT_HOST;
     uint16_t port = 80;
-    String uri = "/trigger/notify" + IFTTT_KEY;
+    String uri = "/trigger/notify" + String(IFTTT_KEY);
     String body = "value1=" + message;
     return sendHTTPRequest(host, port, uri, body, true);
 }
@@ -176,7 +176,7 @@ uint8_t notifierCall(String message) {
 uint8_t logCall(float temp1, float temp2) {
     String host = IFTTT_HOST;
     uint16_t port = 80;
-    String uri = "/trigger/temp_log" + IFTTT_KEY;
+    String uri = "/trigger/temp_log" + String(IFTTT_KEY);
     String body = "value1=" + String(temp1) + "&value2=" + String(temp2);
     return sendHTTPRequest(host, port, uri, body, true);
 }
