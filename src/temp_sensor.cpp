@@ -2,132 +2,135 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <OneWire.h>
-// #include <DallasTemperature.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "DelayTimer.h"
 #include "secret.h"
-
 #define ONE_WIRE_BUS 5
 
-const uint16_t CRC_ERROR_CODE = 1000;
-const String CRC_ERROR_MSG = "CRC problem with temperature sensors";
-const String CONNECTED_MSG = "Arduino device connected";
-const uint16_t TEMP_CHECK_INTERVAL = 60000;
-const uint32_t TEMP_WARNING_INTERVAL = 3600000; // 1 hour
-const uint32_t LOG_INTERVAL = 3600000; // 1 hours 
+// Local Testing Constants
+// const String LOCAL_HOST = "192.168.0.14";
+const String LOCAL_HOST = "10.0.0.16";
+const uint16_t LOCAL_PORT = 5000;
 
-const uint8_t LED_OFF = 1;
 const uint8_t LED_ON = 0;
+const uint8_t LED_OFF = 1;
 const uint8_t LED_HB = LED_BUILTIN;
-const float UPPER_BOUND_WARM = 100;
-const float LOWER_BOUND_WARM = 55;
-const float UPPER_BOUND_COOL = 100;
-const float LOWER_BOUND_COOL = 55;
-
-const String IFTTT_HOST = "maker.ifttt.com";
-const String LISTENER_HOST = "frozen-reef-06019.herokuapp.com";
+const String HEROKU_HOST = "frozen-reef-06019.herokuapp.com";
+const uint16_t HEROKU_PORT = 80;
 
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
 const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; // RED
 
-float getTemperature(const byte address[8], boolean isCelsius);
-uint8_t notifierCall(String message);
-uint8_t logCall(float temp1, float temp2);
-uint8_t pingListener();
-String tempMessage(float temp, String position);
 uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost);
+float getTemperature(const byte address[8], boolean isCelsius);
+void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff);
+
+uint32_t tempCheckInterval = 15000;
+uint32_t errorInterval = 15000;
+bool crcError = false;
+bool webError = false;
 
 WiFiClient client;
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
+DelayTimer dtError;
 DelayTimer dtTemp;
-DelayTimer dtWarningWarm;
-DelayTimer dtWarningCool;
-DelayTimer dtLog;
-uint8_t errnum = 0;
-uint8_t state = 0;
 
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
     digitalWrite(LED_HB, LED_ON);						// Turn LED on
     Serial.begin(115200);
-
     WiFi.begin(WEB_SSID, WEB_PASSWORD);
-	// Wait for connection
 	while(WiFi.status() != WL_CONNECTED) {
 		delay(500);
         digitalWrite(LED_HB, !digitalRead(LED_HB));
         Serial.print(".");
 	}
-    delay(2000);
     digitalWrite(LED_HB, LED_ON);
     Serial.println("Connected");
-    errnum = notifierCall(CONNECTED_MSG); // Send connected IFTTT message
-    Serial.println("errnum: " + String(errnum));
-    errnum = pingListener(); // Send a notification to the listener server
-    Serial.println("errnum: "  + String(errnum));
+    webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/connect", "", false);
 }
 
 void loop() {
     unsigned long msNow = millis();
-    float warmTemp;
-    float coolTemp;
 
-	if(errnum) {
-		if(dtBlink.tripped(msNow)) {
-            state = !state;
-            digitalWrite(LED_HB, state);
-			dtBlink.reset(msNow, 200);
-		}
-		return;
-	}
-
-    if(dtBlink.tripped(msNow)) {
-        if(digitalRead(LED_HB) == 0) {
-          digitalWrite(LED_HB, LED_OFF);
-          dtBlink.reset(msNow, 900);
-        } else {
-          digitalWrite(LED_HB, LED_ON);
-          dtBlink.reset(msNow, 100);
-        }
-    }
-
-    boolean time2Warn = dtWarningWarm.tripped(msNow) || dtWarningCool.tripped(msNow);
-    boolean time2ValidateTemp = dtTemp.tripped(msNow) && time2Warn;
-    boolean time2Log = dtLog.tripped(msNow);
-    if(time2ValidateTemp || time2Log) {
-        warmTemp = getTemperature(WARM_ADDRESS, false);
-        coolTemp = getTemperature(COOL_ADDRESS, false);
-        Serial.println("Temperature:");
-        Serial.print("----Warm: ");
-        Serial.println(warmTemp);
-        Serial.print("----Cool: ");
-        Serial.println(coolTemp);
-        if(time2ValidateTemp) {
-            boolean extremeTempWarm = warmTemp < LOWER_BOUND_WARM || UPPER_BOUND_WARM < warmTemp;
-            boolean extremeTempCool = coolTemp < LOWER_BOUND_COOL || UPPER_BOUND_COOL < coolTemp;
-            if (extremeTempWarm || extremeTempCool) {
-                String message;
-                if (extremeTempWarm) {
-                    message = tempMessage(warmTemp, "warm");
-                    dtWarningWarm.reset(msNow, TEMP_WARNING_INTERVAL);
-                }
-                if (extremeTempCool) {
-                    String message = tempMessage(coolTemp, "cool");
-                    dtWarningCool.reset(msNow, TEMP_WARNING_INTERVAL);
-                }
-                errnum = notifierCall(message);
-                errnum = logCall(warmTemp, coolTemp);
+    if (crcError) {
+        manageBlink(msNow, 1900, 100);
+        if (dtError.tripped(msNow)) {
+            String body = "errorType=CRC";
+            webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/error", body, true);
+            if (!webError) {
+                dtError.reset(msNow, errorInterval);
             }
         }
-        if(time2Log) {
-            errnum = logCall(warmTemp, coolTemp);
-            dtLog.reset(msNow, LOG_INTERVAL);
-        }
-        dtTemp.reset(msNow, TEMP_CHECK_INTERVAL);
-        pingListener();
+    } else if (webError) {
+        manageBlink(msNow, 3900, 100);
+    } else  {
+        manageBlink(msNow, 100, 900);
     }
+
+    if(dtTemp.tripped(msNow)) {
+        dtTemp.reset(msNow, tempCheckInterval);
+        float warmTemp = getTemperature(WARM_ADDRESS, false);
+        if (crcError) {
+            return;
+        }
+        float coolTemp = getTemperature(COOL_ADDRESS, false);
+        if (!crcError) {
+            Serial.println("Temperature:");
+            Serial.print("----Warm: ");
+            Serial.println(warmTemp);
+            Serial.print("----Cool: ");
+            Serial.println(coolTemp);
+            String body = "warmTemp=" + String(warmTemp) + "&coolTemp=" + String(coolTemp);
+            webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/temperature", body, true);
+            if (webError) {
+                dtTemp.setDelay(0);
+            }
+        }
+    }
+}
+
+uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost) {
+    Serial.println();
+    Serial.println("host: " + host);
+    Serial.println("port: " + String(port));
+    Serial.println("uri: " + uri);
+    Serial.println("body: " + body);
+    Serial.print("isPost: ");
+    Serial.println(isPost);
+    HTTPClient http;
+    uint8_t errnum = 0;
+    if (http.begin(client, host, port, uri)) {
+        int httpCode;
+        if (isPost) {
+            http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+            httpCode = http.POST(body);
+        } else {
+            httpCode = http.GET();
+        }
+        Serial.println("httpCode: " + String(httpCode));
+        String payload = http.getString();
+        StaticJsonDocument<75> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        if (error) {
+            errnum = 3;
+        } else {
+            tempCheckInterval = doc["tempCheckInterval"];
+            errorInterval = doc["errorInterval"];
+            Serial.println("tempCheckInterval: " + String(tempCheckInterval));
+            Serial.println("errorInterval: " + String(errorInterval));
+            http.end();   //Close connection
+            if (httpCode <= 0) { //Check the returning code
+                errnum = 2;
+            }
+        }
+    } else {
+        errnum = 1;
+    }
+    Serial.println("errnum: " + String(errnum));
+    return errnum > 0;
 }
 
 float getTemperature(const byte address[8], boolean isCelsius) {
@@ -151,9 +154,12 @@ float getTemperature(const byte address[8], boolean isCelsius) {
     byte crcData = OneWire::crc8( data, 8);
     if (crcData != data[8]) {
         Serial.println("CRC is not valid!");
-        return CRC_ERROR_CODE;
+        crcError = true;
+        return NULL;
     }
-
+    if (crcError) {
+        crcError = false;
+    }
     int16_t raw = (data[1] << 8) | data[0];
     float celsius = (float)raw / 16.0;
     if(!isCelsius) {
@@ -162,80 +168,16 @@ float getTemperature(const byte address[8], boolean isCelsius) {
     } else {
         return celsius;
     }
-    
 }
 
-uint8_t notifierCall(String message) {
-    String host = IFTTT_HOST;
-    uint16_t port = 80;
-    String uri = "/trigger/notify" + String(IFTTT_KEY);
-    String body = "value1=" + message;
-    return sendHTTPRequest(host, port, uri, body, true);
-}
-
-uint8_t logCall(float temp1, float temp2) {
-    String host = IFTTT_HOST;
-    uint16_t port = 80;
-    String uri = "/trigger/temp_log" + String(IFTTT_KEY);
-    String body = "value1=" + String(temp1) + "&value2=" + String(temp2);
-    return sendHTTPRequest(host, port, uri, body, true);
-}
-
-uint8_t pingListener() {
-    String host = LISTENER_HOST;
-    uint16_t port = 80;
-    String uri = "/temp_sensors";
-    String body = "key=" + String(KEY);
-    return sendHTTPRequest(host, port, uri, body, true);
-}
-
-String tempMessage(float temp, String position) {
-    // "The temperature on the WARM side is too HOT (72.3 F)"
-    String adjective;
-    float upperBound;
-    float lowerBound;
-    if (position.equals("warm")) {
-        upperBound = UPPER_BOUND_WARM;
-        lowerBound = LOWER_BOUND_WARM;
-    } else if(position.equals("cool")) {
-        upperBound = UPPER_BOUND_COOL;
-        lowerBound = LOWER_BOUND_COOL;
-    }
-    if (temp < lowerBound) {
-        adjective = "cold";
-    } else if (upperBound < temp) {
-        adjective = "hot";
-    }
-    String message = position + "side is too " + adjective + "(" + temp + ")";
-    Serial.println(message);
-    return message;
-}
-
-uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost) {
-    Serial.println();
-    Serial.println("host: " + host);
-    Serial.println("port: " + String(port));
-    Serial.println("uri: " + uri);
-    Serial.println("body: " + body);
-    Serial.print("isPost: ");
-    Serial.println(isPost);
-    HTTPClient http;
-    if (http.begin(client, host, port, uri)) {
-        int httpCode;
-        if (isPost) {
-            http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-            // http.addHeader("Connection", "close");
-            httpCode = http.POST(body);
+void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff) {
+    if (dtBlink.tripped(msNow)) {
+        if(digitalRead(LED_HB) == 0) {
+            digitalWrite(LED_HB, LED_OFF);
+            dtBlink.reset(msNow, timeOff);
         } else {
-            httpCode = http.GET();
+            digitalWrite(LED_HB, LED_ON);
+            dtBlink.reset(msNow, timeOn);
         }
-        Serial.println("httpCode: " + String(httpCode));
-        http.end();   //Close connection
-        if (httpCode <= 0) { //Check the returning code
-            return 2;
-        }
-    } else {
-        return 1;
-    }
-    return 0;
+    }   
 }
