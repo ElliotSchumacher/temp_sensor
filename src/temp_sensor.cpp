@@ -9,14 +9,13 @@
 #define ONE_WIRE_BUS 5
 
 // Local Testing Constants
-// const String LOCAL_HOST = "192.168.0.14";
-const String LOCAL_HOST = "10.0.0.16";
+const String LOCAL_HOST = "192.168.0.14";
+// const String LOCAL_HOST = "10.0.0.16";
 const uint16_t LOCAL_PORT = 5000;
-
 const uint8_t LED_ON = 0;
 const uint8_t LED_OFF = 1;
 const uint8_t LED_HB = LED_BUILTIN;
-const String HEROKU_HOST = "frozen-reef-06019.herokuapp.com";
+const String HEROKU_HOST = "mysterious-fjord-77889.herokuapp.com";
 const uint16_t HEROKU_PORT = 80;
 
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
@@ -49,7 +48,7 @@ void setup() {
 	}
     digitalWrite(LED_HB, LED_ON);
     Serial.println("Connected");
-    webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/connect", "", false);
+    webError = sendHTTPRequest(HEROKU_HOST, HEROKU_PORT, "/connect", "", false);
 }
 
 void loop() {
@@ -59,7 +58,7 @@ void loop() {
         manageBlink(msNow, 1900, 100);
         if (dtError.tripped(msNow)) {
             String body = "errorType=CRC";
-            webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/error", body, true);
+            webError = sendHTTPRequest(HEROKU_HOST, HEROKU_PORT, "/error", body, true);
             if (!webError) {
                 dtError.reset(msNow, errorInterval);
             }
@@ -84,7 +83,7 @@ void loop() {
             Serial.print("----Cool: ");
             Serial.println(coolTemp);
             String body = "warmTemp=" + String(warmTemp) + "&coolTemp=" + String(coolTemp);
-            webError = sendHTTPRequest(LOCAL_HOST, LOCAL_PORT, "/temperature", body, true);
+            webError = sendHTTPRequest(HEROKU_HOST, HEROKU_PORT, "/temperature", body, true);
             if (webError) {
                 dtTemp.setDelay(0);
             }
