@@ -4,6 +4,7 @@
 #include <OneWire.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 #include "DelayTimer.h"
 #include "secret.h"
 #define ONE_WIRE_BUS 5
@@ -17,6 +18,8 @@ const uint8_t LED_OFF = 1;
 const uint8_t LED_HB = LED_BUILTIN;
 const String HEROKU_HOST = "mysterious-fjord-77889.herokuapp.com";
 const uint16_t HEROKU_PORT = 80;
+const uint8_t FIRST_SENSOR_ADDRESS = 20;
+
 
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
 const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; // RED
@@ -24,6 +27,7 @@ const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; //
 uint8_t sendHTTPRequest(String host, uint16_t port, String uri, String body, bool isPost);
 float getTemperature(const byte address[8], boolean isCelsius);
 void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff);
+void clearEEPROM();
 
 uint32_t tempCheckInterval = 15000;
 uint32_t errorInterval = 15000;
@@ -36,10 +40,23 @@ DelayTimer dtBlink;
 DelayTimer dtError;
 DelayTimer dtTemp;
 
+struct Node{
+    char guid[4];
+    uint32_t tempCheckInterval;
+    uint32_t errorInterval;
+    uint8_t sensorCount;
+};
+
+struct Sensor {
+    byte address[8];
+};
+
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
     digitalWrite(LED_HB, LED_ON);						// Turn LED on
     Serial.begin(115200);
+    EEPROM.begin(256);
+    delay(5000);
     WiFi.begin(WEB_SSID, WEB_PASSWORD);
 	while(WiFi.status() != WL_CONNECTED) {
 		delay(500);
@@ -179,4 +196,11 @@ void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff) {
             dtBlink.reset(msNow, timeOn);
         }
     }   
+}
+
+void clearEEPROM() {
+    for (int i = 0 ; i < EEPROM.length() ; i++) {
+        EEPROM.write(i, 0);
+    }
+    EEPROM.commit();
 }
