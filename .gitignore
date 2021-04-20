@@ -6,6 +6,7 @@
 src/main.cpp
 src/ex_DS18B20.cpp
 src/ex_web_connection.cpp
+src/wifiConfigTest.cpp
 secret.h
 .travis.yml
 temp-sensor.code-workspace
