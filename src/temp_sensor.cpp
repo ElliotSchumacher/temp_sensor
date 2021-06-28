@@ -1,6 +1,8 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
+#include <WiFiManager.h>
+#include <DNSServer.h>
 #include <OneWire.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -20,7 +22,6 @@ const String HEROKU_HOST = "mysterious-fjord-77889.herokuapp.com";
 const uint16_t HEROKU_PORT = 80;
 const uint8_t FIRST_SENSOR_ADDRESS = 20;
 
-
 const byte COOL_ADDRESS[] = {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26};
 const byte WARM_ADDRESS[] = {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}; // RED
 
@@ -33,8 +34,9 @@ uint32_t tempCheckInterval = 15000;
 uint32_t errorInterval = 15000;
 bool crcError = false;
 bool webError = false;
-
 WiFiClient client;
+WiFiServer server(80);
+String header;
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
 DelayTimer dtError;
@@ -57,15 +59,13 @@ void setup() {
     Serial.begin(115200);
     EEPROM.begin(256);
     delay(5000);
-    WiFi.begin(WEB_SSID, WEB_PASSWORD);
-	while(WiFi.status() != WL_CONNECTED) {
-		delay(500);
-        digitalWrite(LED_HB, !digitalRead(LED_HB));
-        Serial.print(".");
-	}
-    digitalWrite(LED_HB, LED_ON);
+    WiFiManager wifiManager;
+    wifiManager.resetSettings();
+    wifiManager.autoConnect("AutoConnectAP");
     Serial.println("Connected");
     webError = sendHTTPRequest(HEROKU_HOST, HEROKU_PORT, "/connect", "", false);
+    Serial.print("WIFI_CONFIG_ADDRESS: ");
+    Serial.println(WIFI);
 }
 
 void loop() {
@@ -199,7 +199,7 @@ void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff) {
 }
 
 void clearEEPROM() {
-    for (int i = 0 ; i < EEPROM.length() ; i++) {
+    for (int i = 0; i < EEPROM.length(); i++) {
         EEPROM.write(i, 0);
     }
     EEPROM.commit();
