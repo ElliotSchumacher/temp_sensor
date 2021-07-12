@@ -1,0 +1,5 @@
+char nodeGuid[8]
+uint32_t tempCheckInterval
+uint32_t errorInterval
+byte sensorAddress[8]
+byte sensorAddress[8]
