@@ -67,7 +67,7 @@ void loop() {
             for (uint8_t index = 0; index < nodeData.sensorCount; index++) {
                 Serial.print("-----:");
                 Serial.print(index);
-                Serial.println(":");
+                Serial.print(": ");
                 Serial.println(temperatures[index]);
              }
         }
