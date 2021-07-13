@@ -1,7 +1,9 @@
 #include <Arduino.h>
+#include <OneWire.h>
 #include "LittleFS.h"
 #include "DelayTimer.h"
 #include "secret.h"
+#define ONE_WIRE_BUS 5
 
 const uint8_t LED_ON = 0;
 const uint8_t LED_OFF = 1;
@@ -14,6 +16,7 @@ void setupConfigVariables();
 void printConfigVariables();
 void writeConfigFile();
 void printFile(String filePath);
+float getTemperature(const byte address[8], boolean isCelsius);
 
 struct Node{
     char guid[GUID_LENGTH];
@@ -26,9 +29,13 @@ struct Sensor {
     byte address[8];
 };
 
+bool crcError = false;
+
 Node nodeData;
 Sensor sensors[8];
+OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
+DelayTimer dtTemp;
 
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
@@ -48,6 +55,23 @@ void setup() {
 void loop() {
     unsigned long msNow = millis();
     manageBlink(msNow, 100, 1900);
+
+    if(dtTemp.tripped(msNow)) {
+        dtTemp.reset(msNow, nodeData.tempCheckInterval);
+        float temperatures[nodeData.sensorCount];
+        for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount && !crcError; sensorIndex++) {
+            temperatures[sensorIndex] = getTemperature(sensors[sensorIndex].address, false);
+        }
+        if (!crcError) {
+            Serial.println("Temperature:");
+            for (uint8_t index = 0; index < nodeData.sensorCount; index++) {
+                Serial.print("-----:");
+                Serial.print(index);
+                Serial.println(":");
+                Serial.println(temperatures[index]);
+             }
+        }
+    }
 }
 
 void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff) {
@@ -132,5 +156,42 @@ void printFile(String filePath) {
             Serial.print(file.read(), BIN);
         }
         file.close();
+    }
+}
+
+float getTemperature(const byte address[8], boolean isCelsius) {
+    byte data[12];
+
+    oneWire.reset();
+    oneWire.select(address);
+    oneWire.write(0x44, 1);        // start conversion, with parasite power on at the end
+    delay(1000);     // maybe 750ms is enough, maybe not
+    oneWire.reset();
+    oneWire.select(address);    
+    oneWire.write(0xBE);         // Read Scratchpad
+
+    // Serial.print("  Data = ");
+    for (byte i = 0; i < 9; i++) {           // we need 9 bytes
+        data[i] = oneWire.read();
+        // Serial.print(data[i], HEX);
+        // Serial.print(" ");
+    }
+
+    byte crcData = OneWire::crc8( data, 8);
+    if (crcData != data[8]) {
+        Serial.println("CRC is not valid!");
+        crcError = true;
+        return NULL;
+    }
+    if (crcError) {
+        crcError = false;
+    }
+    int16_t raw = (data[1] << 8) | data[0];
+    float celsius = (float)raw / 16.0;
+    if(!isCelsius) {
+        float fahrenheit = celsius * 1.8 + 32.0;
+        return fahrenheit;
+    } else {
+        return celsius;
     }
 }
