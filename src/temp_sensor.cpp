@@ -8,6 +8,7 @@
 const uint8_t LED_ON = 0;
 const uint8_t LED_OFF = 1;
 const uint8_t LED_HB = LED_BUILTIN;
+const uint8_t LED_INFO_PIN = 12;
 const String CONFIG_PATH = "/config.bin";
 const uint8_t GUID_LENGTH = 8;
 
@@ -39,6 +40,7 @@ DelayTimer dtTemp;
 
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
+    pinMode(LED_INFO_PIN, OUTPUT);
     digitalWrite(LED_HB, LED_ON);						// Turn LED on
     Serial.begin(115200);
     delay(2000);
@@ -56,7 +58,7 @@ void loop() {
     unsigned long msNow = millis();
     manageBlink(msNow, 100, 1900);
 
-    if(dtTemp.tripped(msNow)) {
+    if (dtTemp.tripped(msNow)) {
         dtTemp.reset(msNow, nodeData.tempCheckInterval);
         float temperatures[nodeData.sensorCount];
         for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount && !crcError; sensorIndex++) {
