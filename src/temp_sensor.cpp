@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <OneWire.h>
+#include <WiFiManager.h>
+#include <DNSServer.h>
 #include "LittleFS.h"
 #include "DelayTimer.h"
 #include "secret.h"
@@ -32,6 +34,8 @@ struct Sensor {
 
 bool crcError = false;
 
+WiFiServer server(80);
+String header;
 Node nodeData;
 Sensor sensors[8];
 OneWire oneWire(ONE_WIRE_BUS);
@@ -44,6 +48,15 @@ void setup() {
     digitalWrite(LED_HB, LED_ON);						// Turn LED on
     Serial.begin(115200);
     delay(2000);
+    WiFiManager wifiManager;
+    // wifiManager.resetSettings();
+    bool res = wifiManager.autoConnect("AutoConnectAP");
+    if (res) {
+        Serial.println("Connected");
+    } else {
+        Serial.println("Failed to connect");
+        ESP.restart();
+    }
     if(!LittleFS.begin()){
         Serial.println("An Error has occurred while mounting LittleFS");
         return;
