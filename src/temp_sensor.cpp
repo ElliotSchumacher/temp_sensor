@@ -2,6 +2,7 @@
 #include <OneWire.h>
 #include <WiFiManager.h>
 #include <DNSServer.h>
+#include <WebSocketsClient.h>
 #include "LittleFS.h"
 #include "DelayTimer.h"
 #include "secret.h"
@@ -13,6 +14,8 @@ const uint8_t LED_HB = LED_BUILTIN;
 const uint8_t LED_INFO_PIN = 12;
 const String CONFIG_PATH = "/config.bin";
 const uint8_t GUID_LENGTH = 8;
+const String HOST = "192.168.0.14";
+const uint16_t PORT = 5001;
 
 void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff);
 void setupConfigVariables();
@@ -20,6 +23,7 @@ void printConfigVariables();
 void writeConfigFile();
 void printFile(String filePath);
 float getTemperature(const byte address[8], boolean isCelsius);
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
 
 struct Node{
     char guid[GUID_LENGTH];
@@ -34,6 +38,7 @@ struct Sensor {
 
 bool crcError = false;
 
+WebSocketsClient webSocket;
 WiFiServer server(80);
 String header;
 Node nodeData;
@@ -41,6 +46,7 @@ Sensor sensors[8];
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
 DelayTimer dtTemp;
+DelayTimer dtWSTest;
 
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
@@ -57,6 +63,12 @@ void setup() {
         Serial.println("Failed to connect");
         ESP.restart();
     }
+
+    webSocket.begin(HOST, PORT, "/ws");
+    webSocket.onEvent(webSocketEvent);
+    webSocket.setReconnectInterval(10000);
+    webSocket.enableHeartbeat(15000, 4000, 2);
+
     if(!LittleFS.begin()){
         Serial.println("An Error has occurred while mounting LittleFS");
         return;
@@ -65,11 +77,13 @@ void setup() {
     setupConfigVariables();
     printConfigVariables();
     printFile(CONFIG_PATH);
+    dtWSTest.setDelay(2000);
 }
 
 void loop() {
     unsigned long msNow = millis();
     manageBlink(msNow, 100, 1900);
+    webSocket.loop();
 
     if (dtTemp.tripped(msNow)) {
         dtTemp.reset(msNow, nodeData.tempCheckInterval);
@@ -86,6 +100,12 @@ void loop() {
                 Serial.println(temperatures[index]);
              }
         }
+    }
+    if (dtWSTest.tripped(msNow)) {
+        String message = "TEST: " + msNow;
+        webSocket.sendTXT("TEST");
+        Serial.println("Sending MSG");
+        dtWSTest.reset(msNow);
     }
 }
 
@@ -208,5 +228,34 @@ float getTemperature(const byte address[8], boolean isCelsius) {
         return fahrenheit;
     } else {
         return celsius;
+    }
+}
+
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+    switch(type) {
+		case WStype_DISCONNECTED:
+			Serial.printf("[WSc] Disconnected!\n");
+			break;
+		case WStype_CONNECTED: {
+			Serial.printf("[WSc] Connected to url: %s\n", payload);
+
+			// send message to server when Connected
+			webSocket.sendTXT("Connected");
+		}
+			break;
+		case WStype_TEXT:
+			Serial.printf("[WSc] get text: %s\n", payload);
+
+			// send message to server
+			// webSocket.sendTXT("message here");
+			break;
+        case WStype_PING:
+            // pong will be send automatically
+            Serial.printf("[WSc] get ping\n");
+            break;
+        case WStype_PONG:
+            // answer to a ping we send
+            Serial.printf("[WSc] get pong\n");
+            break;
     }
 }
