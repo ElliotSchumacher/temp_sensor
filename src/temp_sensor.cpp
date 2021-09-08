@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <ArduinoJson.h>
 #include <OneWire.h>
 #include <WiFiManager.h>
 #include <DNSServer.h>
@@ -13,27 +15,26 @@ const uint8_t LED_OFF = 1;
 const uint8_t LED_HB = LED_BUILTIN;
 const uint8_t LED_INFO_PIN = 12;
 const String CONFIG_PATH = "/config.bin";
-const uint8_t GUID_LENGTH = 8;
 const String HOST = "192.168.0.14";
 const uint16_t PORT = 5001;
+const uint16_t ERROR_INTERVAL = 4000;
+const uint8_t MAC_ADDRESS_LENGTH = 6;
+const uint8_t SENSOR_ADDRESS_LENGTH = 8;
+const uint8_t MAX_SENSOR_COUNT = 8;
 
 void manageBlink(uint32_t msNow, uint16_t timeOn, uint16_t timeOff);
 void setupConfigVariables();
 void printConfigVariables();
 void writeConfigFile();
 void printFile(String filePath);
+boolean searchForSensors();
 float getTemperature(const byte address[8], boolean isCelsius);
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
+void sendNodeData();
 
 struct Node{
-    char guid[GUID_LENGTH];
     uint32_t tempCheckInterval;
-    uint32_t errorInterval;
     uint8_t sensorCount;
-};
-
-struct Sensor {
-    byte address[8];
 };
 
 bool crcError = false;
@@ -42,11 +43,13 @@ WebSocketsClient webSocket;
 WiFiServer server(80);
 String header;
 Node nodeData;
-Sensor sensors[8];
+byte sensors[MAX_SENSOR_COUNT][SENSOR_ADDRESS_LENGTH];
 OneWire oneWire(ONE_WIRE_BUS);
 DelayTimer dtBlink;
 DelayTimer dtTemp;
 DelayTimer dtWSTest;
+DelayTimer dtSensorSearch;
+byte macAddress[MAC_ADDRESS_LENGTH];
 
 void setup() {
     pinMode(LED_HB, OUTPUT);							// Set Request LED as output
@@ -77,7 +80,11 @@ void setup() {
     setupConfigVariables();
     printConfigVariables();
     printFile(CONFIG_PATH);
-    dtWSTest.setDelay(2000);
+
+    dtWSTest.setDelay(10000);
+    dtSensorSearch.setDelay(10000);
+    WiFi.macAddress(macAddress);
+    searchForSensors();
 }
 
 void loop() {
@@ -89,7 +96,7 @@ void loop() {
         dtTemp.reset(msNow, nodeData.tempCheckInterval);
         float temperatures[nodeData.sensorCount];
         for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount && !crcError; sensorIndex++) {
-            temperatures[sensorIndex] = getTemperature(sensors[sensorIndex].address, false);
+            temperatures[sensorIndex] = getTemperature(sensors[sensorIndex], false);
         }
         if (!crcError) {
             Serial.println("Temperature:");
@@ -103,9 +110,30 @@ void loop() {
     }
     if (dtWSTest.tripped(msNow)) {
         String message = "TEST: " + msNow;
-        webSocket.sendTXT("TEST");
-        Serial.println("Sending MSG");
+        webSocket.sendTXT("{\"type\":\"test\",\"message\":\"test message\"}");
+        Serial.println("{\"type\":\"test\",\"message\":\"test message\"}");
         dtWSTest.reset(msNow);
+    }
+
+    if (dtSensorSearch.tripped(msNow)) {
+        boolean changed = searchForSensors();
+        if (changed) {
+            sendNodeData();
+        }
+        
+        Serial.print("changed: ");
+        Serial.println(changed);
+        // Print out sensor addresses
+        for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount; sensorIndex++) {
+            Serial.print("Sensor[");
+            Serial.print(sensorIndex);
+            Serial.print("]: ");
+            for (uint8_t addressIndex = 0; addressIndex < SENSOR_ADDRESS_LENGTH; addressIndex++) {
+                Serial.print(sensors[sensorIndex][addressIndex]);
+                Serial.print(" ");
+            }
+            Serial.println();
+        }
     }
 }
 
@@ -127,57 +155,27 @@ void setupConfigVariables() {
         Serial.println("Failed to open file for reading");
     } else {
         file.read((byte *)&nodeData, sizeof(nodeData));
-        for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount; sensorIndex++) {
-            file.read((byte *)&sensors[sensorIndex], sizeof(Sensor));
-        }
         file.close();
     }
 }
 
 void printConfigVariables() {
-    Serial.println("nodeGuid:");
-    for (uint8_t index = 0; index < sizeof(nodeData.guid); index++) {
-        Serial.print(nodeData.guid[index]);
-    }
-    Serial.println();
     Serial.println("tempCheckInterval:");
     Serial.println(nodeData.tempCheckInterval);
-    Serial.println("errorInterval:");
-    Serial.println(nodeData.errorInterval);
     Serial.println("sensorCount:");
     Serial.println(nodeData.sensorCount);
-    for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount; sensorIndex++) {
-        Serial.print("sensorAddress:");
-        Serial.print(sensorIndex);
-        Serial.println(":");
-        for (int index = 0; index < 8; index++) {
-            Serial.print(sensors[sensorIndex].address[index], HEX);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
 }
 
 void writeConfigFile() {
     const Node nodeDataToSave = {
-        {'n', 'o', 'd', 'e', 'G', 'U', 'I', 'D'},
         30500,
-        45050,
         2
-    };
-    const Sensor warmSensor = {
-        {0x28, 0xB3, 0x53, 0x07, 0xD6, 0x01, 0x3C, 0x0C}
-    };
-    const Sensor coolSensor = {
-        {0x28, 0x0D, 0x5B, 0x07, 0xD6, 0x01, 0x3C, 0x26}
     };
     File file = LittleFS.open(CONFIG_PATH, "w+");
     if (!file) {
         Serial.println("Failed to open file for writing");
     } else {
         file.write((byte *)&nodeDataToSave, sizeof(nodeDataToSave));
-        file.write((byte *)&warmSensor, sizeof(warmSensor));
-        file.write((byte *)&coolSensor, sizeof(coolSensor));
         file.close();
     }
 }
@@ -192,6 +190,34 @@ void printFile(String filePath) {
         }
         file.close();
     }
+}
+
+// return true if the sensors have changed
+boolean searchForSensors() {
+    oneWire.reset_search();
+    byte newAddresses[MAX_SENSOR_COUNT][SENSOR_ADDRESS_LENGTH];
+    byte address[8];
+    uint8_t present = nodeData.sensorCount;
+    uint8_t added = 0;
+    uint8_t newSensorIndex = 0;
+    while (oneWire.search(address)) {
+        boolean matched = false;
+        for (uint8_t index = 0; index < nodeData.sensorCount; index++) {
+            if (memcmp(sensors[index], address, sizeof(address)) == 0) {
+                matched = true;
+            }
+        }
+        if (matched) {
+            present--;
+        } else {
+            added++;
+        }
+        memcpy(newAddresses[newSensorIndex], address, sizeof(address));
+        newSensorIndex++;
+    }
+    nodeData.sensorCount = newSensorIndex;
+    memcpy(sensors, newAddresses, sizeof(sensors));
+    return present != 0 || added != 0;
 }
 
 float getTemperature(const byte address[8], boolean isCelsius) {
@@ -240,7 +266,9 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 			Serial.printf("[WSc] Connected to url: %s\n", payload);
 
 			// send message to server when Connected
-			webSocket.sendTXT("Connected");
+			webSocket.sendTXT("{\"type\":\"connect\"}");
+            searchForSensors();
+            sendNodeData();
 		}
 			break;
 		case WStype_TEXT:
@@ -258,4 +286,33 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             Serial.printf("[WSc] get pong\n");
             break;
     }
+}
+
+void sendNodeData() {
+    StaticJsonDocument<1536> doc;
+
+    doc["type"] = "data";
+    JsonArray mac = doc.createNestedArray("mac");
+    for (uint8_t index = 0; index < MAC_ADDRESS_LENGTH; index++) {
+        mac.add(macAddress[index]);
+    }
+
+    JsonArray sensorList = doc.createNestedArray("sensors");
+    for (uint8_t sensorIndex = 0; sensorIndex < nodeData.sensorCount; sensorIndex++) {
+        JsonArray sensor = sensorList.createNestedArray();
+        for (uint8_t addressIndex = 0; addressIndex < SENSOR_ADDRESS_LENGTH; addressIndex++) {
+            sensor.add(sensors[sensorIndex][addressIndex]);
+        }
+    }
+
+    // Serial.print("Mac Address: ");
+    // Serial.println(macAddress[0]);
+    Serial.print("JSON DATA: ");
+    serializeJson(doc, Serial);
+    Serial.println();
+    String serializedJson;
+    serializeJson(doc, serializedJson);
+
+    webSocket.sendTXT(serializedJson);
+
 }
